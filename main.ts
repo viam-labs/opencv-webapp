@@ -4,15 +4,28 @@ import * as VIAM from "@viamrobotics/sdk";
 let robotClient: VIAM.RobotClient | undefined;
 let webappService: VIAM.GenericServiceClient | undefined;
 
-interface FileInfo {
-  size: number;
+interface DirectoryEntry {
+  name: string;
+  kind: "directory";
   modified: string;
+  path: string;
+  children: Entry[];
 }
+
+interface FileEntry {
+  name: string;
+  kind: "file";
+  modified: string;
+  path: string;
+  size: number;
+}
+
+type Entry = DirectoryEntry | FileEntry;
 
 interface PassInfo {
   complete: boolean;
   timestamp: string;
-  files: Record<string, FileInfo>;
+  entries: Entry[];
 }
 
 interface PassesData {
@@ -117,25 +130,8 @@ function displayPasses(passes: Record<string, PassInfo>) {
       const statusClass = pass.complete ? "complete" : "incomplete";
       const statusLabel = pass.complete ? "Complete" : "In Progress";
       const statusBadge = pass.complete ? "status-complete" : "status-incomplete";
-
-      const files = Object.keys(pass.files).filter(
-        (filename) => !filename.startsWith(".")
-      );
-      files.sort();
-      const fileItems = files
-        .map((filename) => {
-          const file = pass.files[filename];
-          return `
-            <li class="file-item">
-              <a href="#" onclick="downloadFile('${passId}', '${filename}'); return false;">${filename}</a>
-              <span class="file-meta">
-                ${formatBytes(file.size)} | ${file.modified}
-              </span>
-            </li>
-          `;
-        })
-        .join("");
-      const fileCount = files.length;
+      const fileCount = countFiles(pass.entries);
+      const entryContent = renderEntries(passId, pass.entries);
 
       return `
         <div class="pass ${statusClass}">
@@ -153,9 +149,7 @@ function displayPasses(passes: Record<string, PassInfo>) {
             </div>
           </div>
           <div class="pass-content">
-            <ul class="file-list">
-              ${fileItems}
-            </ul>
+            ${entryContent}
           </div>
         </div>
       `;
@@ -170,6 +164,71 @@ function displayPasses(passes: Record<string, PassInfo>) {
       togglePass(firstHeader as HTMLElement);
     }
   }, 100);
+}
+
+function renderEntries(passId: string, entries: Entry[]): string {
+  if (!entries.length) {
+    return `<div class="entry-empty">No files yet.</div>`;
+  }
+
+  return `
+    <ul class="entry-list">
+      ${entries.map((entry) => renderEntry(passId, entry)).join("")}
+    </ul>
+  `;
+}
+
+function renderEntry(passId: string, entry: Entry): string {
+  if (entry.kind === "directory") {
+    const childCount = entry.children.length;
+    const childContent =
+      childCount > 0
+        ? renderEntries(passId, entry.children)
+        : `<div class="entry-empty">Empty folder</div>`;
+
+    return `
+      <li class="entry directory">
+        <div class="entry-header directory-header" onclick="toggleEntry(this)">
+          <div class="entry-summary">
+            <span class="entry-icon" aria-hidden="true">📁</span>
+            <span class="entry-name">${entry.name}</span>
+          </div>
+          <div class="entry-meta">
+            <span class="entry-count">${childCount} item${childCount === 1 ? "" : "s"}</span>
+            <span class="entry-modified">${entry.modified}</span>
+            <span class="entry-toggle" aria-hidden="true">▶</span>
+          </div>
+        </div>
+        <div class="entry-children">
+          ${childContent}
+        </div>
+      </li>
+    `;
+  }
+
+  return `
+    <li class="entry file">
+      <div class="entry-header file-header">
+        <div class="entry-summary">
+          <span class="entry-icon" aria-hidden="true">📄</span>
+          <a href="#" onclick="downloadFile('${passId}', '${entry.path}'); return false;">${entry.name}</a>
+        </div>
+        <div class="entry-meta">
+          <span class="entry-size">${formatBytes(entry.size)}</span>
+          <span class="entry-modified">${entry.modified}</span>
+        </div>
+      </div>
+    </li>
+  `;
+}
+
+function countFiles(entries: Entry[]): number {
+  return entries.reduce((sum, entry) => {
+    if (entry.kind === "file") {
+      return sum + 1;
+    }
+    return sum + countFiles(entry.children);
+  }, 0);
 }
 
 async function downloadFile(passId: string, filename: string) {
@@ -230,11 +289,29 @@ function togglePass(header: HTMLElement) {
   }
 }
 
+function toggleEntry(header: HTMLElement) {
+  const children = header.nextElementSibling as HTMLElement | null;
+  const icon = header.querySelector(".entry-toggle") as HTMLElement | null;
+
+  if (children) {
+    children.classList.toggle("expanded");
+  }
+  if (icon) {
+    icon.classList.toggle("expanded");
+  }
+}
+
 function expandAll() {
   document.querySelectorAll<HTMLElement>(".pass-content").forEach((content) => {
     content.classList.add("expanded");
   });
   document.querySelectorAll<HTMLElement>(".toggle-icon").forEach((icon) => {
+    icon.classList.add("expanded");
+  });
+  document.querySelectorAll<HTMLElement>(".entry-children").forEach((child) => {
+    child.classList.add("expanded");
+  });
+  document.querySelectorAll<HTMLElement>(".entry-toggle").forEach((icon) => {
     icon.classList.add("expanded");
   });
 }
@@ -244,6 +321,12 @@ function collapseAll() {
     content.classList.remove("expanded");
   });
   document.querySelectorAll<HTMLElement>(".toggle-icon").forEach((icon) => {
+    icon.classList.remove("expanded");
+  });
+  document.querySelectorAll<HTMLElement>(".entry-children").forEach((child) => {
+    child.classList.remove("expanded");
+  });
+  document.querySelectorAll<HTMLElement>(".entry-toggle").forEach((icon) => {
     icon.classList.remove("expanded");
   });
 }
@@ -334,6 +417,35 @@ function formatBytes(size: number | undefined): string {
   return `${value.toFixed(precision)} ${units[idx]}`;
 }
 
+function isEntry(value: unknown): value is Entry {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const record = value as Record<string, unknown>;
+  if (record.kind === "file") {
+    return (
+      typeof record.name === "string" &&
+      typeof record.modified === "string" &&
+      typeof record.path === "string" &&
+      typeof record.size === "number"
+    );
+  }
+
+  if (record.kind === "directory") {
+    const children = record.children;
+    return (
+      typeof record.name === "string" &&
+      typeof record.modified === "string" &&
+      typeof record.path === "string" &&
+      Array.isArray(children) &&
+      children.every(isEntry)
+    );
+  }
+
+  return false;
+}
+
 function isPassInfo(value: unknown): value is PassInfo {
   if (!value || typeof value !== "object") {
     return false;
@@ -342,8 +454,8 @@ function isPassInfo(value: unknown): value is PassInfo {
   return (
     typeof record.complete === "boolean" &&
     typeof record.timestamp === "string" &&
-    typeof record.files === "object" &&
-    record.files !== null
+    Array.isArray(record.entries) &&
+    record.entries.every(isEntry)
   );
 }
 
@@ -377,6 +489,7 @@ function wireUi() {
 }
 
 (window as typeof window & { togglePass?: typeof togglePass }).togglePass = togglePass;
+(window as typeof window & { toggleEntry?: typeof toggleEntry }).toggleEntry = toggleEntry;
 (window as typeof window & { downloadFile?: typeof downloadFile }).downloadFile = downloadFile;
 
 document.addEventListener("DOMContentLoaded", () => {

@@ -128,6 +128,12 @@ h1 {
     margin: 0;
 }
 
+.entry-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
 .file-item {
     padding: 10px;
     margin: 5px 0;
@@ -152,6 +158,90 @@ h1 {
 .file-meta {
     color: #666;
     font-size: 0.9em;
+}
+
+.entry {
+    margin: 6px 0;
+}
+
+.entry-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    border-radius: 4px;
+}
+
+.directory-header {
+    background: #f0f4f8;
+    cursor: pointer;
+    user-select: none;
+}
+
+.directory-header:hover {
+    background: #e8f0f8;
+}
+
+.file-header {
+    background: #fafafa;
+}
+
+.entry-summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 500;
+}
+
+.entry-summary a {
+    color: #2196F3;
+    text-decoration: none;
+}
+
+.entry-summary a:hover {
+    text-decoration: underline;
+}
+
+.entry-icon {
+    font-size: 1.1em;
+}
+
+.entry-meta {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 0.85em;
+    color: #666;
+}
+
+.entry-children {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.3s ease;
+    margin-left: 20px;
+    padding-left: 16px;
+    border-left: 1px solid #e0e0e0;
+}
+
+.entry-children.expanded {
+    max-height: 2000px;
+    margin-top: 6px;
+}
+
+.entry-toggle {
+    transition: transform 0.3s ease;
+}
+
+.entry-toggle.expanded {
+    transform: rotate(90deg);
+}
+
+.entry-empty {
+    padding: 8px 12px;
+    color: #777;
+    font-size: 0.85em;
+    font-style: italic;
 }
 
 button {

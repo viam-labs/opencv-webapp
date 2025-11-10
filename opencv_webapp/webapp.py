@@ -132,25 +132,43 @@ class WebApp(Generic, EasyResource):
 
             is_complete = (pass_dir / ".complete").exists()
 
-            files: dict[str, Any] = {}
-            for file_path in pass_dir.iterdir():
-                if file_path.is_file():
-                    stat = file_path.stat()
-                    files[file_path.name] = {
-                        "size": stat.st_size,
-                        "modified": datetime.fromtimestamp(stat.st_mtime).strftime(
-                            "%Y-%m-%d %H:%M:%S"
-                        ),
-                    }
-
             passes[pass_id] = {
                 "complete": is_complete,
                 "timestamp": timestamp,
-                "files": files,
+                "entries": [
+                    self._describe_entry(child, pass_dir)
+                    for child in sorted(pass_dir.iterdir(), key=lambda p: p.name.lower())
+                    if not child.name.startswith(".")
+                ],
             }
 
         logger.info("Listed %d passes", len(passes))
         return {"passes": passes}
+
+    def _describe_entry(self, path: Path, root: Path) -> Mapping[str, Any]:
+        stat = path.stat()
+        modified = datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+        relative_path = path.relative_to(root).as_posix()
+        if path.is_dir():
+            return {
+                "name": path.name,
+                "kind": "directory",
+                "modified": modified,
+                "path": relative_path,
+                "children": [
+                    self._describe_entry(child, root)
+                    for child in sorted(path.iterdir(), key=lambda p: p.name.lower())
+                    if not child.name.startswith(".")
+                ],
+            }
+
+        return {
+            "name": path.name,
+            "kind": "file",
+            "modified": modified,
+            "path": relative_path,
+            "size": stat.st_size,
+        }
 
     def _get_file(self, pass_id: str | None, filename: str | None) -> Mapping[str, Any]:
         if not pass_id or not filename:
