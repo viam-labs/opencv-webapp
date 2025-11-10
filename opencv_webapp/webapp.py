@@ -88,6 +88,8 @@ class WebApp(Generic, EasyResource):
             pass_id = command.get("pass_id")
             filename = command.get("filename")
             return self._get_file(pass_id, filename)
+        if cmd == "get_base_dir":
+            return self._get_base_dir()
         raise ValueError(f"Unknown command: {cmd}")
 
     def _extract_timestamp(self, pass_id: str) -> str:
@@ -167,6 +169,9 @@ class WebApp(Generic, EasyResource):
         encoded = base64.b64encode(data).decode("utf-8")
         logger.info("Serving file %s/%s (%d bytes)", pass_id, filename, len(data))
         return {"filename": filename, "data": encoded, "size": len(data)}
+
+    def _get_base_dir(self) -> Mapping[str, Any]:
+        return {"base_dir": str(self.base_dir)}
 
 
 async def main() -> None:

@@ -8,6 +8,7 @@ and accepts two `do_command` calls:
 |-------------|---------------------------------------------|--------------------------------------|
 | `list_passes` | `{ "command": "list_passes" }`              | Returns all pass folders and files.  |
 | `get_file`  | `{ "command": "get_file", "pass_id": "...", "filename": "..." }` | Returns one file (base64 encoded). |
+| `get_base_dir` | `{ "command": "get_base_dir" }` | Returns the absolute path the service watches. |
 
 The repository also includes static assets (`index.html`, `style.css`,
 `main.ts`) that you can bundle into a separate Viam application if you want a

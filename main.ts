@@ -299,7 +299,7 @@ function loadSettingsFromCookie(): MachineSettings | undefined {
 
     if (!serviceName) {
       console.warn(
-        "Service name not found in cookies or meta tag; falling back to 'webapp'. " +
+        "Service name not found in cookies or meta tag; falling back to 'calibration-webapp'. " +
           "You can set a meta tag <meta name=\"viam-service-name\" content=\"your-service-name\"> if needed."
       );
     }
