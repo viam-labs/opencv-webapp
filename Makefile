@@ -8,10 +8,14 @@ setup:
 	rm -rf $(LIB_DIR)
 	$(PYTHON) -m pip install --target $(LIB_DIR) --no-compile --no-cache-dir -r requirements.txt
 
-build: $(TARBALL)
-
-$(TARBALL):
-	tar -czf $(TARBALL) README.md LICENSE meta.json requirements.txt bin src $(LIB_DIR)
+build: setup
+	tar -czf $(TARBALL) \
+		meta.json \
+		run.sh \
+		requirements.txt \
+		README.md \
+		opencv_webapp \
+		$(LIB_DIR)
 
 clean:
 	rm -f $(TARBALL)

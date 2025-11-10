@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Hand-Eye Calibration Data</title>
+    <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+    <div class="container">
+        <h1>🎯 Hand-Eye Calibration Data Viewer</h1>
+        
+        <div class="info-box">
+            <strong>Status</strong><br>
+            <span id="status-text">Waiting for configuration…</span>
+        </div>
+
+        <h2>Calibration Passes</h2>
+        <button id="refresh-button">Refresh</button>
+        <button id="expand-all-button">Expand All</button>
+        <button id="collapse-all-button" class="secondary">Collapse All</button>
+        
+        <div id="passes">
+            <div class="empty-state">
+                <p>Loading...</p>
+            </div>
+        </div>
+    </div>
+
+    <script id="viam-web-app-config" type="application/json">
+      {
+        "host": "mac-air-main.h028k9vtj1.viam.cloud",
+        "serviceName": "webapp",
+        "signalingAddress": "https://app.viam.com:443",
+        "credentials": {
+          "type": "api-key",
+          "payload": "YOUR-API-KEY",
+          "authEntity": "YOUR-API-KEY-ID"
+        }
+      }
+    </script>
+    <script type="module" src="main.js"></script>
+</body>
+</html>

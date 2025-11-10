@@ -1,0 +1,6 @@
+lib/
+module.tar.gz
+node_modules/
+main.js
+__pycache__/
+

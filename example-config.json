@@ -1,0 +1,21 @@
+{
+  "components": [],
+  "services": [
+    {
+      "name": "webapp",
+      "type": "generic",
+      "namespace": "viam",
+      "model": "viam:opencv-webapp:webapp",
+      "attributes": {
+        "assets_dir": "./module-data/calibration-passes"
+      }
+    }
+  ],
+  "modules": [
+    {
+      "type": "local",
+      "name": "opencv-webapp",
+      "executable_path": "/path/to/opencv-webapp-viam/run.sh"
+    }
+  ]
+}

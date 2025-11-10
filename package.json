@@ -1,5 +1,17 @@
 {
+  "name": "opencv-webapp-frontend",
+  "version": "1.0.0",
+  "description": "Hand-Eye Calibration Data Viewer",
+  "scripts": {
+    "start": "esbuild ./main.ts --bundle --outfile=main.js --servedir=. --format=esm",
+    "build": "esbuild ./main.ts --bundle --outfile=main.js --format=esm"
+  },
+  "author": "Viam Labs",
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "esbuild": "^0.19.0"
+  },
   "dependencies": {
-    "@viamrobotics/sdk": "^0.53.0"
+    "@viamrobotics/sdk": "^0.38.0"
   }
 }
