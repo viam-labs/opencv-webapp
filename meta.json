@@ -1,6 +1,6 @@
 {
   "module_id": "viam:opencv-webapp",
-  "visibility": "private",
+  "visibility": "public",
   "url": "https://github.com/viam-labs/opencv-webapp",
   "description": "Exposes OpenCV calibration files through a web interface",
   "models": [
@@ -18,5 +18,17 @@
       "linux/amd64",
       "linux/arm64"
     ]
-  }
+  },
+  "applications": [
+    {
+      "name": "opencv-calibration-viewer",
+      "type": "single_machine",
+      "entrypoint": "dist/index.html",
+      "logoPath": "dist/viam.png",
+      "customizations": {
+        "heading": "Hand-Eye Calibration Data Viewer",
+        "subheading": "Select a machine to browse calibration passes"
+      }
+    }
+  ]
 }

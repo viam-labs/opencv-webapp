@@ -3,8 +3,9 @@
   "version": "1.0.0",
   "description": "Hand-Eye Calibration Data Viewer",
   "scripts": {
-    "start": "esbuild ./main.ts --bundle --outfile=main.js --servedir=. --format=esm",
-    "build": "esbuild ./main.ts --bundle --outfile=main.js --format=esm"
+    "prepare:static": "mkdir -p dist && cp index.html style.css dist/ && (test -f viam.png && cp viam.png dist/ || true)",
+    "start": "npm run prepare:static && esbuild ./main.ts --bundle --format=esm --outfile=dist/main.js --servedir=dist --watch",
+    "build": "rm -rf dist && npm run prepare:static && esbuild ./main.ts --bundle --format=esm --outfile=dist/main.js"
   },
   "author": "Viam Labs",
   "license": "Apache-2.0",
