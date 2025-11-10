@@ -1,8 +1,8 @@
+import Cookies from "./js-cookie.js";
 import * as VIAM from "@viamrobotics/sdk";
 
 let robotClient: VIAM.RobotClient | undefined;
 let webappService: VIAM.GenericServiceClient | undefined;
-type CredentialType = VIAM.Credential["type"];
 
 interface FileInfo {
   size: number;
@@ -19,51 +19,43 @@ interface PassesData {
   passes: Record<string, PassInfo>;
 }
 
-interface Credentials {
-  type: string;
-  payload: string;
-  authEntity?: string;
-}
-
 interface MachineSettings {
   host: string;
   serviceName: string;
-  credentials: Credentials;
-  signalingAddress?: string;
+  apiKeyId: string;
+  apiKeySecret: string;
 }
 
-interface PortalConfig {
-  machine?: {
-    host?: string;
-    signalingAddress?: string;
+interface PortalCookie {
+  apiKey: {
+    id: string;
+    key: string;
   };
-  config?: Record<string, unknown>;
-  secrets?: Record<string, Partial<Credentials>>;
+  machineId: string;
+  hostname: string;
 }
-
-type PortalWindow = Window &
-  typeof globalThis & {
-    __VIAM_WEB_APP__?: PortalConfig;
-  };
 
 async function main() {
-  setStatus("Connecting…");
-
-  const settings = resolveMachineSettings();
+  const settings = loadSettingsFromCookie();
   if (!settings) {
-    console.warn("Unable to resolve machine settings");
     setStatus("Configuration required");
     showError(
-      "Missing Viam connection details. Configure credentials in the Viam portal or update the inline config block."
+      "Missing machine cookie. Please open this app from your viamapplications.com URL after selecting a machine."
     );
     return;
   }
 
+  setStatus("Connecting…");
+
   try {
     robotClient = await VIAM.createRobotClient({
       host: settings.host,
-      credentials: toCredential(settings.credentials),
-      signalingAddress: settings.signalingAddress ?? "https://app.viam.com:443",
+      credentials: {
+        type: "api-key",
+        payload: settings.apiKeySecret,
+        authEntity: settings.apiKeyId,
+      },
+      signalingAddress: "https://app.viam.com:443",
     });
 
     webappService = new VIAM.GenericServiceClient(robotClient, settings.serviceName);
@@ -81,153 +73,6 @@ async function main() {
   window.addEventListener("beforeunload", () => {
     robotClient?.disconnect();
   });
-}
-
-function resolveMachineSettings(): MachineSettings | undefined {
-  return extractConfigFromPortal() ?? extractConfigFromInlineScript();
-}
-
-function extractConfigFromPortal(): MachineSettings | undefined {
-  const portal = (window as PortalWindow).__VIAM_WEB_APP__;
-  if (!portal) {
-    return undefined;
-  }
-
-  const config = portal.config ?? {};
-  const host =
-    sanitizeString((config.host as string | undefined) ?? portal.machine?.host) ??
-    undefined;
-  const serviceName =
-    sanitizeString(
-      (config.serviceName as string | undefined) ??
-        (config.resourceName as string | undefined)
-    ) ?? "webapp";
-  const signalingAddress = sanitizeString(
-    (config.signalingAddress as string | undefined) ??
-      portal.machine?.signalingAddress
-  );
-
-  let credentials =
-    normalizeCredentials(
-      portal.secrets &&
-        extractSecret(
-          portal.secrets,
-          sanitizeString(config.credentialsSecret as string | undefined)
-        )
-    ) ??
-    normalizeCredentials({
-      type:
-        (config.credentialType as string | undefined) ??
-        (config.type as string | undefined),
-      payload: config.payload as string | undefined,
-      authEntity: config.authEntity as string | undefined,
-    });
-
-  if (!credentials) {
-    credentials = firstValidSecret(portal.secrets);
-  }
-
-  if (!host || !credentials) {
-    console.warn("Portal config is missing host or credentials", { host, credentials });
-    return undefined;
-  }
-
-  return { host, serviceName, credentials, signalingAddress };
-}
-
-function extractConfigFromInlineScript(): MachineSettings | undefined {
-  const script = document.getElementById("viam-web-app-config");
-  if (!script || script.tagName !== "SCRIPT") {
-    return undefined;
-  }
-
-  try {
-    const data = JSON.parse(script.textContent ?? "{}");
-    const host = sanitizeString(data.host);
-    const serviceName =
-      sanitizeString(data.serviceName ?? data.resourceName) ?? "webapp";
-    const signalingAddress = sanitizeString(data.signalingAddress);
-    const credentials =
-      normalizeCredentials(data.credentials) ??
-      normalizeCredentials({
-        type: data.credentialType,
-        payload: data.payload,
-        authEntity: data.authEntity,
-      });
-
-    if (!host || !credentials) {
-      return undefined;
-    }
-
-    return { host, serviceName, credentials, signalingAddress };
-  } catch (error) {
-    console.warn("Unable to parse inline configuration", error);
-    return undefined;
-  }
-}
-
-function normalizeCredentials(
-  credentials: Partial<Credentials> | undefined
-): Credentials | undefined {
-  if (!credentials) {
-    return undefined;
-  }
-
-  const type = sanitizeString(credentials.type) ?? "api-key";
-  const payload = sanitizeString(credentials.payload);
-  const authEntity = sanitizeString(credentials.authEntity);
-
-  if (!payload) {
-    return undefined;
-  }
-
-  return { type, payload, authEntity };
-}
-
-function extractSecret(
-  secrets: Record<string, Partial<Credentials>>,
-  key: string | undefined
-): Partial<Credentials> | undefined {
-  if (!key) {
-    return undefined;
-  }
-  return secrets[key];
-}
-
-function firstValidSecret(
-  secrets: Record<string, Partial<Credentials>> | undefined
-): Credentials | undefined {
-  if (!secrets) {
-    return undefined;
-  }
-
-  for (const value of Object.values(secrets)) {
-    const normalized = normalizeCredentials(value);
-    if (normalized) {
-      return normalized;
-    }
-  }
-  return undefined;
-}
-
-function sanitizeString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  if (!trimmed || isPlaceholder(trimmed)) {
-    return undefined;
-  }
-  return trimmed;
-}
-
-function isPlaceholder(value: string): boolean {
-  const upper = value.toUpperCase();
-  return (
-    upper.startsWith("YOUR-") ||
-    upper.includes("REPLACE") ||
-    upper.includes("EXAMPLE")
-  );
 }
 
 async function refreshPasses() {
@@ -421,6 +266,44 @@ function setStatus(message: string) {
   }
 }
 
+function loadSettingsFromCookie(): MachineSettings | undefined {
+  const segments = window.location.pathname.split("/").filter(Boolean);
+  if (segments.length < 2) {
+    console.warn("Unable to determine machine slug from URL", window.location.pathname);
+    return undefined;
+  }
+
+  const machineSlug = segments[1];
+  const raw = Cookies.get(machineSlug);
+  if (!raw) {
+    console.warn("Machine cookie not found for slug", machineSlug);
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as PortalCookie;
+    if (
+      !parsed ||
+      !parsed.apiKey ||
+      typeof parsed.apiKey.id !== "string" ||
+      typeof parsed.apiKey.key !== "string" ||
+      typeof parsed.hostname !== "string"
+    ) {
+      throw new Error("Cookie missing required fields");
+    }
+
+    return {
+      host: parsed.hostname,
+      serviceName: "webapp",
+      apiKeyId: parsed.apiKey.id,
+      apiKeySecret: parsed.apiKey.key,
+    };
+  } catch (error) {
+    console.error("Failed to parse machine cookie", error);
+    return undefined;
+  }
+}
+
 function formatBytes(size: number | undefined): string {
   if (typeof size !== "number" || !Number.isFinite(size) || size < 0) {
     return "—";
@@ -464,14 +347,6 @@ function isPassesData(value: unknown): value is PassesData {
   return Object.values(passesRecord).every(isPassInfo);
 }
 
-function toCredential(credentials: Credentials): VIAM.Credential {
-  return {
-    type: credentials.type as CredentialType,
-    payload: credentials.payload,
-    authEntity: credentials.authEntity ?? "",
-  };
-}
-
 function wireUi() {
   const refreshBtn = document.getElementById("refresh-button");
   if (refreshBtn) {
@@ -492,8 +367,30 @@ function wireUi() {
 (window as typeof window & { togglePass?: typeof togglePass }).togglePass = togglePass;
 (window as typeof window & { downloadFile?: typeof downloadFile }).downloadFile = downloadFile;
 
-main().catch((error: unknown) => {
-  console.error("Encountered an unexpected error:", error);
-  showError(`Unexpected error: ${String(error)}`);
-  setStatus("Error");
+document.addEventListener("DOMContentLoaded", () => {
+  console.log("Hand-Eye Calibration Viewer initialized.");
+  console.log("VIAM SDK loaded:", VIAM);
+  console.log("Available VIAM exports:", Object.keys(VIAM));
+  console.log("Cookies library loaded:", Cookies);
+
+  const segments = window.location.pathname.split("/").filter(Boolean);
+  const machineSlug = segments.length >= 2 ? segments[1] : undefined;
+  console.log("Resolved machine slug:", machineSlug ?? "(none)");
+
+  if (machineSlug) {
+    const cookieData = Cookies.get(machineSlug);
+    if (cookieData) {
+      console.log("Machine cookie found.");
+    } else {
+      console.warn("No machine cookie found for slug:", machineSlug);
+    }
+  } else {
+    console.warn("Unable to determine machine slug from URL:", window.location.pathname);
+  }
+
+  main().catch((error: unknown) => {
+    console.error("Encountered an unexpected error:", error);
+    showError(`Unexpected error: ${String(error)}`);
+    setStatus("Error");
+  });
 });
