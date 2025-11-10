@@ -1,0 +1,31 @@
+{
+	"$schema": "https://dl.viam.dev/module.schema.json",
+	"module_id": "viam:opencv-webapp",
+	"visibility": "public",
+	"url": "https://github.com/viamrobotics/opencv-webapp",
+	"description": "OpenCV Webapp",
+	"models": [
+		{
+			"api": "rdk:component:generic",
+			"model": "viam:opencv-webapp:webapp",
+			"short_description": "Placeholder model",
+			"markdown_link": "README.md#model-viamopencv-webappwebapp"
+		}
+	],
+	"applications": [
+		{
+			"name": "opencv-webapp",
+			"type": "single_machine",
+			"entrypoint": "dist/index.html"
+		}
+	],
+	"markdown_link": "README.md",
+	"entrypoint": "bin/opencv-webapp",
+	"first_run": "",
+	"build": {
+		"build": "make build",
+		"setup": "make setup",
+		"path": "module.tar.gz",
+		"arch": ["linux/amd64", "linux/arm64"]
+	}
+}

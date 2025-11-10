@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "@viamrobotics/sdk": "^0.53.0"
+  }
+}
