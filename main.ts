@@ -292,9 +292,21 @@ function loadSettingsFromCookie(): MachineSettings | undefined {
       throw new Error("Cookie missing required fields");
     }
 
+    const cookieServiceName = Cookies.get(`${machineSlug}-resourcename`);
+    const serviceName =
+      (cookieServiceName && cookieServiceName.trim()) ||
+      (document.querySelector<HTMLMetaElement>('meta[name="viam-service-name"]')?.content?.trim() ?? "");
+
+    if (!serviceName) {
+      console.warn(
+        "Service name not found in cookies or meta tag; falling back to 'webapp'. " +
+          "You can set a meta tag <meta name=\"viam-service-name\" content=\"your-service-name\"> if needed."
+      );
+    }
+
     return {
       host: parsed.hostname,
-      serviceName: "webapp",
+      serviceName: serviceName || "calibration-webapp",
       apiKeyId: parsed.apiKey.id,
       apiKeySecret: parsed.apiKey.key,
     };
