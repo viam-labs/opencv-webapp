@@ -160,6 +160,44 @@ h1 {
     font-size: 0.9em;
 }
 
+.pass-download {
+    background: #1976D2;
+    color: white;
+    border: none;
+    padding: 6px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.85em;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.pass-download:hover {
+    background: #0F5CAD;
+}
+
+.pass-download:focus {
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(25, 118, 210, 0.25);
+}
+
+.pass-download.loading {
+    background: #1565C0;
+    cursor: wait;
+}
+
+.pass-download:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+}
+
+.download-progress {
+    margin-top: 6px;
+    font-size: 0.85em;
+    color: #0D47A1;
+}
+
 .entry {
     margin: 6px 0;
 }

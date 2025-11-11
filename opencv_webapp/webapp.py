@@ -5,11 +5,15 @@ Minimal Viam Generic Service for Calibration File Management.
 from __future__ import annotations
 
 import base64
+import contextlib
 import logging
 import re
+import tempfile
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Mapping, Sequence, Tuple
+from typing import Any, Mapping, MutableMapping, Sequence, Tuple
+from uuid import uuid4
+from zipfile import ZipFile, ZIP_DEFLATED
 
 import asyncio
 
@@ -26,12 +30,15 @@ logger = logging.getLogger(__name__)
 
 
 class WebApp(Generic, EasyResource):
-    """
-    Exposes calibration files through do_command API.
+    """Expose calibration files through the Generic do_command API.
 
     Supported commands:
       - {"command": "list_passes"}
       - {"command": "get_file", "pass_id": "...", "filename": "..."}
+      - {"command": "start_pass_archive", "pass_id": "..."}
+      - {"command": "get_pass_archive_chunk", "session": "...", "offset": 0, "chunk_size": 4194304}
+      - {"command": "finish_pass_archive", "session": "..."}
+      - {"command": "get_base_dir"}
     """
 
     MODEL = Model(ModelFamily("viam", "opencv-webapp"), "webapp")
@@ -41,6 +48,7 @@ class WebApp(Generic, EasyResource):
         self.base_dir = Path(base_dir).expanduser().resolve()
         self.base_dir.mkdir(parents=True, exist_ok=True)
         logger.info("WebApp service '%s' initialized at %s", self.name, self.base_dir)
+        self._archive_sessions: MutableMapping[str, dict[str, Any]] = {}
 
     @classmethod
     def new(
@@ -88,6 +96,17 @@ class WebApp(Generic, EasyResource):
             pass_id = command.get("pass_id")
             filename = command.get("filename")
             return self._get_file(pass_id, filename)
+        if cmd == "start_pass_archive":
+            pass_id = command.get("pass_id")
+            return self._start_pass_archive(pass_id)
+        if cmd == "get_pass_archive_chunk":
+            session = command.get("session")
+            offset = command.get("offset", 0)
+            chunk_size = command.get("chunk_size", 4 * 1024 * 1024)
+            return self._get_pass_archive_chunk(session, offset, chunk_size)
+        if cmd == "finish_pass_archive":
+            session = command.get("session")
+            return self._finish_pass_archive(session)
         if cmd == "get_base_dir":
             return self._get_base_dir()
         raise ValueError(f"Unknown command: {cmd}")
@@ -187,6 +206,123 @@ class WebApp(Generic, EasyResource):
         encoded = base64.b64encode(data).decode("utf-8")
         logger.info("Serving file %s/%s (%d bytes)", pass_id, filename, len(data))
         return {"filename": filename, "data": encoded, "size": len(data)}
+
+    def _start_pass_archive(self, pass_id: str | None) -> Mapping[str, Any]:
+        if not pass_id:
+            raise ValueError("pass_id required")
+
+        pass_dir = (self.base_dir / pass_id).resolve()
+        try:
+            pass_dir.relative_to(self.base_dir)
+        except ValueError as exc:
+            raise ValueError("Invalid pass_id") from exc
+
+        if not pass_dir.exists() or not pass_dir.is_dir():
+            raise ValueError(f"Pass not found: {pass_id}")
+
+        session_id = uuid4().hex
+        filename = f"{pass_id}.zip"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tmp_file:
+            archive_path = Path(tmp_file.name)
+
+        try:
+            with ZipFile(archive_path, "w", ZIP_DEFLATED) as zip_file:
+                for item in pass_dir.rglob("*"):
+                    if item.is_dir():
+                        continue
+                    rel_path = item.relative_to(pass_dir).as_posix()
+                    zip_file.write(item, rel_path)
+
+            size = archive_path.stat().st_size
+            self._archive_sessions[session_id] = {
+                "path": archive_path,
+                "size": size,
+                "filename": filename,
+                "pass_id": pass_id,
+            }
+            logger.info(
+                "Prepared archive for pass %s (%d bytes) session=%s",
+                pass_id,
+                size,
+                session_id,
+            )
+            return {
+                "session": session_id,
+                "filename": filename,
+                "size": size,
+            }
+        except Exception:
+            with contextlib.suppress(OSError):
+                archive_path.unlink(missing_ok=True)
+            raise
+
+    def _get_pass_archive_chunk(
+        self, session_id: str | None, offset: Any, chunk_size: Any
+    ) -> Mapping[str, Any]:
+        if not session_id:
+            raise ValueError("session required")
+        session = self._archive_sessions.get(session_id)
+        if session is None:
+            raise ValueError("Unknown session")
+
+        total_size = int(session["size"])
+        start = int(offset or 0)
+        if start < 0:
+            raise ValueError("offset must be >= 0")
+
+        max_chunk = 8 * 1024 * 1024
+        default_chunk = 4 * 1024 * 1024
+        try:
+            requested = int(chunk_size)
+        except (TypeError, ValueError):
+            requested = default_chunk
+
+        if requested <= 0:
+            requested = default_chunk
+        chunk_len = min(requested, max_chunk)
+
+        archive_path: Path = session["path"]
+        if start >= total_size:
+            return {
+                "data": "",
+                "offset": total_size,
+                "bytes": 0,
+                "done": True,
+                "size": total_size,
+            }
+
+        with archive_path.open("rb") as fh:
+            fh.seek(start)
+            data = fh.read(chunk_len)
+
+        bytes_read = len(data)
+        encoded = base64.b64encode(data).decode("utf-8")
+        next_offset = start + bytes_read
+        done = next_offset >= total_size
+
+        return {
+            "data": encoded,
+            "offset": next_offset,
+            "bytes": bytes_read,
+            "done": done,
+            "size": total_size,
+        }
+
+    def _finish_pass_archive(self, session_id: str | None) -> Mapping[str, Any]:
+        if not session_id:
+            raise ValueError("session required")
+
+        session = self._archive_sessions.pop(session_id, None)
+        if session is None:
+            raise ValueError("Unknown session")
+
+        archive_path: Path = session["path"]
+        with contextlib.suppress(OSError):
+            archive_path.unlink(missing_ok=True)
+        logger.info(
+            "Cleaned archive session %s for pass %s", session_id, session["pass_id"]
+        )
+        return {"status": "ok"}
 
     def _get_base_dir(self) -> Mapping[str, Any]:
         return {"base_dir": str(self.base_dir)}

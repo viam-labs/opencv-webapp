@@ -32,6 +32,20 @@ interface PassesData {
   passes: Record<string, PassInfo>;
 }
 
+interface ArchiveStartResponse {
+  session: string;
+  filename: string;
+  size: number;
+}
+
+interface ArchiveChunkResponse {
+  data?: string;
+  offset: number;
+  bytes: number;
+  done: boolean;
+  size: number;
+}
+
 interface MachineSettings {
   host: string;
   serviceName: string;
@@ -144,6 +158,7 @@ function displayPasses(passes: Record<string, PassInfo>) {
               </div>
             </div>
             <div class="pass-meta">
+              <button class="pass-download" onclick="downloadPass('${passId}', event); return false;">Download ZIP</button>
               <span class="file-count">(${fileCount} files)</span>
               <span class="toggle-icon">▶</span>
             </div>
@@ -270,13 +285,155 @@ async function downloadFile(passId: string, filename: string) {
   }
 }
 
+async function downloadPass(passId: string, evt?: Event) {
+  evt?.stopPropagation();
+
+  if (!webappService) {
+    alert("Service is not ready yet.");
+    return;
+  }
+
+  let session: string | undefined;
+  let success = false;
+  const button = (evt?.currentTarget ?? evt?.target) as HTMLButtonElement | undefined;
+  const originalButtonLabel = button?.textContent ?? "Download ZIP";
+
+  const setButtonState = (label: string, disabled: boolean) => {
+    if (!button) {
+      return;
+    }
+    button.disabled = disabled;
+    button.textContent = label;
+    button.classList.toggle("loading", disabled);
+  };
+
+  setButtonState("Preparing…", true);
+  setDownloadProgress("Preparing archive…");
+
+  try {
+    const startRequest = VIAM.Struct.fromJson({
+      command: "start_pass_archive",
+      pass_id: passId,
+    });
+    const startRaw = (await webappService.doCommand(startRequest)) as unknown;
+    if (!isArchiveStartResponse(startRaw)) {
+      throw new Error("Unexpected response from start_pass_archive");
+    }
+
+    session = startRaw.session;
+    const totalSize = startRaw.size;
+    const filename = startRaw.filename || `${passId}.zip`;
+
+    const chunkSize = 4 * 1024 * 1024;
+    const parts: Uint8Array[] = [];
+    let nextOffset = 0;
+    let downloadedBytes = 0;
+    const startTime = performance.now();
+
+    while (nextOffset < totalSize) {
+      const chunkRequest = VIAM.Struct.fromJson({
+        command: "get_pass_archive_chunk",
+        session,
+        offset: nextOffset,
+        chunk_size: chunkSize,
+      });
+      const chunkRaw = (await webappService.doCommand(chunkRequest)) as unknown;
+      if (!isArchiveChunkResponse(chunkRaw)) {
+        throw new Error("Unexpected response from get_pass_archive_chunk");
+      }
+
+      const chunkData = chunkRaw.data ?? "";
+      const chunkBytes =
+        chunkData.length > 0 ? base64ToUint8Array(chunkData) : new Uint8Array();
+      if (chunkBytes.length > 0) {
+        parts.push(chunkBytes);
+      }
+
+      const bytesRead = chunkRaw.bytes ?? chunkBytes.length;
+      nextOffset = chunkRaw.offset ?? nextOffset + bytesRead;
+      downloadedBytes = Math.min(nextOffset, totalSize);
+
+      const percent = totalSize > 0 ? Math.round((downloadedBytes / totalSize) * 100) : 0;
+      const elapsedSeconds = (performance.now() - startTime) / 1000;
+      const etaSeconds =
+        percent > 0 && elapsedSeconds > 0
+          ? ((totalSize - downloadedBytes) / (downloadedBytes / elapsedSeconds)) || Infinity
+          : Infinity;
+      const etaText = formatDuration(etaSeconds);
+
+      setDownloadProgress(
+        `Downloading… ${formatBytes(downloadedBytes)} of ${formatBytes(totalSize)} (${percent}%)` +
+          (Number.isFinite(etaSeconds) ? ` · ~${etaText} remaining` : " · estimating…")
+      );
+      setButtonState(`Downloading… ${percent}%`, true);
+
+      if (chunkRaw.done) {
+        break;
+      }
+
+      if (bytesRead === 0) {
+        console.warn("Archive chunk returned zero bytes; stopping early.");
+        break;
+      }
+    }
+
+    setDownloadProgress("Finalizing download…");
+    const blob = new Blob(parts, { type: "application/zip" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(url);
+    success = true;
+    setDownloadProgress("Download ready. Starting browser save…");
+  } catch (error) {
+    console.error("Download archive error:", error);
+    setDownloadProgress(`Download failed: ${String(error)}`);
+    alert(`Failed to download archive: ${String(error)}`);
+  } finally {
+    if (session) {
+      await finishArchiveSession(session);
+    }
+    setTimeout(() => {
+      setDownloadProgress(null);
+    }, success ? 3000 : 6000);
+    setButtonState(originalButtonLabel, false);
+  }
+}
+
+async function finishArchiveSession(session: string) {
+  if (!webappService) {
+    return;
+  }
+
+  try {
+    const request = VIAM.Struct.fromJson({
+      command: "finish_pass_archive",
+      session,
+    });
+    await webappService.doCommand(request);
+  } catch (error) {
+    console.warn("Failed to clean archive session", error);
+  }
+}
+
 function base64ToBlob(base64Data: string): Blob {
+  return new Blob([base64ToUint8Array(base64Data)]);
+}
+
+function base64ToUint8Array(base64Data: string): Uint8Array {
+  if (!base64Data) {
+    return new Uint8Array();
+  }
   const binaryString = atob(base64Data);
   const bytes = new Uint8Array(binaryString.length);
   for (let i = 0; i < binaryString.length; i += 1) {
     bytes[i] = binaryString.charCodeAt(i);
   }
-  return new Blob([bytes]);
+  return bytes;
 }
 
 function togglePass(header: HTMLElement) {
@@ -349,6 +506,21 @@ function setStatus(message: string) {
   }
 }
 
+function setDownloadProgress(message: string | null) {
+  const element = document.getElementById("download-progress");
+  if (!element) {
+    return;
+  }
+
+  if (message === null) {
+    element.textContent = "";
+    element.setAttribute("hidden", "true");
+  } else {
+    element.textContent = message;
+    element.removeAttribute("hidden");
+  }
+}
+
 function loadSettingsFromCookie(): MachineSettings | undefined {
   const segments = window.location.pathname.split("/").filter(Boolean);
   if (segments.length < 2) {
@@ -417,6 +589,29 @@ function formatBytes(size: number | undefined): string {
   return `${value.toFixed(precision)} ${units[idx]}`;
 }
 
+function formatDuration(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    return "estimating…";
+  }
+  const rounded = Math.round(seconds);
+  if (rounded < 60) {
+    return `${rounded}s`;
+  }
+  const minutes = Math.floor(rounded / 60);
+  const remainingSeconds = rounded % 60;
+  if (minutes < 60) {
+    return remainingSeconds === 0 ? `${minutes}m` : `${minutes}m ${remainingSeconds}s`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  if (hours < 24) {
+    return remainingMinutes === 0 ? `${hours}h` : `${hours}h ${remainingMinutes}m`;
+  }
+  const days = Math.floor(hours / 24);
+  const remainingHours = hours % 24;
+  return remainingHours === 0 ? `${days}d` : `${days}d ${remainingHours}h`;
+}
+
 function isEntry(value: unknown): value is Entry {
   if (!value || typeof value !== "object") {
     return false;
@@ -471,6 +666,34 @@ function isPassesData(value: unknown): value is PassesData {
   return Object.values(passesRecord).every(isPassInfo);
 }
 
+function isArchiveStartResponse(value: unknown): value is ArchiveStartResponse {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.session === "string" &&
+    typeof record.filename === "string" &&
+    typeof record.size === "number"
+  );
+}
+
+function isArchiveChunkResponse(value: unknown): value is ArchiveChunkResponse {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  const hasData =
+    typeof record.data === "string" || typeof record.data === "undefined" || record.data === null;
+  return (
+    hasData &&
+    typeof record.offset === "number" &&
+    typeof record.bytes === "number" &&
+    typeof record.done === "boolean" &&
+    typeof record.size === "number"
+  );
+}
+
 function wireUi() {
   const refreshBtn = document.getElementById("refresh-button");
   if (refreshBtn) {
@@ -491,6 +714,7 @@ function wireUi() {
 (window as typeof window & { togglePass?: typeof togglePass }).togglePass = togglePass;
 (window as typeof window & { toggleEntry?: typeof toggleEntry }).toggleEntry = toggleEntry;
 (window as typeof window & { downloadFile?: typeof downloadFile }).downloadFile = downloadFile;
+(window as typeof window & { downloadPass?: typeof downloadPass }).downloadPass = downloadPass;
 
 document.addEventListener("DOMContentLoaded", () => {
   console.log("Hand-Eye Calibration Viewer initialized.");
