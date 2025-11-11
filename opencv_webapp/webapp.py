@@ -9,7 +9,7 @@ import contextlib
 import logging
 import re
 import tempfile
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, MutableMapping, Sequence, Tuple
 from uuid import uuid4
@@ -98,7 +98,8 @@ class WebApp(Generic, EasyResource):
             return self._get_file(pass_id, filename)
         if cmd == "start_pass_archive":
             pass_id = command.get("pass_id")
-            return self._start_pass_archive(pass_id)
+            machine = command.get("machine")
+            return self._start_pass_archive(pass_id, machine)
         if cmd == "get_pass_archive_chunk":
             session = command.get("session")
             offset = command.get("offset", 0)
@@ -207,7 +208,9 @@ class WebApp(Generic, EasyResource):
         logger.info("Serving file %s/%s (%d bytes)", pass_id, filename, len(data))
         return {"filename": filename, "data": encoded, "size": len(data)}
 
-    def _start_pass_archive(self, pass_id: str | None) -> Mapping[str, Any]:
+    def _start_pass_archive(
+        self, pass_id: str | None, machine: str | None
+    ) -> Mapping[str, Any]:
         if not pass_id:
             raise ValueError("pass_id required")
 
@@ -221,7 +224,10 @@ class WebApp(Generic, EasyResource):
             raise ValueError(f"Pass not found: {pass_id}")
 
         session_id = uuid4().hex
-        filename = f"{pass_id}.zip"
+        safe_pass = self._safe_component(pass_id)
+        safe_machine = self._safe_component(machine or "machine")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        filename = f"{safe_pass}_{safe_machine}_{timestamp}.zip"
         with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tmp_file:
             archive_path = Path(tmp_file.name)
 
@@ -239,6 +245,8 @@ class WebApp(Generic, EasyResource):
                 "size": size,
                 "filename": filename,
                 "pass_id": pass_id,
+                "timestamp": timestamp,
+                "machine": machine,
             }
             logger.info(
                 "Prepared archive for pass %s (%d bytes) session=%s",
@@ -250,6 +258,8 @@ class WebApp(Generic, EasyResource):
                 "session": session_id,
                 "filename": filename,
                 "size": size,
+                "timestamp": timestamp,
+                "machine": machine,
             }
         except Exception:
             with contextlib.suppress(OSError):
@@ -323,6 +333,10 @@ class WebApp(Generic, EasyResource):
             "Cleaned archive session %s for pass %s", session_id, session["pass_id"]
         )
         return {"status": "ok"}
+
+    @staticmethod
+    def _safe_component(value: str) -> str:
+        return re.sub(r"[^A-Za-z0-9._-]", "_", value)
 
     def _get_base_dir(self) -> Mapping[str, Any]:
         return {"base_dir": str(self.base_dir)}

@@ -3,6 +3,12 @@ import * as VIAM from "@viamrobotics/sdk";
 
 let robotClient: VIAM.RobotClient | undefined;
 let webappService: VIAM.GenericServiceClient | undefined;
+let autoRefreshHandle: number | undefined;
+const AUTO_REFRESH_MS = 1_000; // 1 second
+let machineSettings: MachineSettings | undefined;
+let currentMachineSlug: string | undefined;
+const expandedPasses = new Set<string>();
+const expandedEntries = new Set<string>();
 
 interface DirectoryEntry {
   name: string;
@@ -36,6 +42,8 @@ interface ArchiveStartResponse {
   session: string;
   filename: string;
   size: number;
+  timestamp?: string;
+  machine?: string;
 }
 
 interface ArchiveChunkResponse {
@@ -72,6 +80,7 @@ async function main() {
     return;
   }
 
+  machineSettings = settings;
   setStatus("Connecting…");
 
   try {
@@ -90,6 +99,7 @@ async function main() {
 
     await refreshPasses();
     wireUi();
+    startAutoRefresh();
   } catch (error) {
     console.error("Connection error:", error);
     setStatus("Connection failed");
@@ -98,6 +108,7 @@ async function main() {
   }
 
   window.addEventListener("beforeunload", () => {
+    stopAutoRefresh();
     robotClient?.disconnect();
   });
 }
@@ -115,6 +126,7 @@ async function refreshPasses() {
       throw new Error("Unexpected response shape from list_passes");
     }
     displayPasses(raw.passes);
+    setStatus(`Connected · Last updated ${new Date().toLocaleTimeString()}`);
   } catch (error) {
     console.error("Error loading passes:", error);
     showError(`Error loading passes: ${String(error)}`);
@@ -127,7 +139,11 @@ function displayPasses(passes: Record<string, PassInfo>) {
     return;
   }
 
-  const sortedPassIds = Object.keys(passes).sort().reverse();
+  const seenPassIds = new Set<string>();
+  const seenEntryKeys = new Set<string>();
+  const sortedPassIds = Object.keys(passes).sort((a, b) =>
+    comparePassTimestamp(passes[b], passes[a])
+  );
 
   if (sortedPassIds.length === 0) {
     container.innerHTML = `
@@ -140,16 +156,18 @@ function displayPasses(passes: Record<string, PassInfo>) {
 
   const html = sortedPassIds
     .map((passId) => {
+      seenPassIds.add(passId);
       const pass = passes[passId];
       const statusClass = pass.complete ? "complete" : "incomplete";
       const statusLabel = pass.complete ? "Complete" : "In Progress";
       const statusBadge = pass.complete ? "status-complete" : "status-incomplete";
+      const isExpanded = expandedPasses.has(passId);
       const fileCount = countFiles(pass.entries);
-      const entryContent = renderEntries(passId, pass.entries);
+      const entryContent = renderEntries(passId, pass.entries, seenEntryKeys);
 
       return `
-        <div class="pass ${statusClass}">
-          <div class="pass-header" onclick="togglePass(this)">
+        <div class="pass ${statusClass}" data-pass-id="${passId}">
+          <div class="pass-header" data-pass-id="${passId}" onclick="togglePass(this)">
             <div class="pass-info">
               <div class="timestamp">🕐 ${pass.timestamp}</div>
               <div class="pass-name-row">
@@ -160,10 +178,10 @@ function displayPasses(passes: Record<string, PassInfo>) {
             <div class="pass-meta">
               <button class="pass-download" onclick="downloadPass('${passId}', event); return false;">Download ZIP</button>
               <span class="file-count">(${fileCount} files)</span>
-              <span class="toggle-icon">▶</span>
+              <span class="toggle-icon${isExpanded ? " expanded" : ""}">▶</span>
             </div>
           </div>
-          <div class="pass-content">
+          <div class="pass-content${isExpanded ? " expanded" : ""}">
             ${entryContent}
           </div>
         </div>
@@ -173,37 +191,48 @@ function displayPasses(passes: Record<string, PassInfo>) {
 
   container.innerHTML = html;
 
-  setTimeout(() => {
-    const firstHeader = document.querySelector(".pass-header");
-    if (firstHeader) {
-      togglePass(firstHeader as HTMLElement);
+  for (const passId of Array.from(expandedPasses)) {
+    if (!seenPassIds.has(passId)) {
+      expandedPasses.delete(passId);
     }
-  }, 100);
+  }
+  for (const key of Array.from(expandedEntries)) {
+    if (!seenEntryKeys.has(key)) {
+      expandedEntries.delete(key);
+    }
+  }
 }
 
-function renderEntries(passId: string, entries: Entry[]): string {
+function renderEntries(
+  passId: string,
+  entries: Entry[],
+  seenEntries: Set<string>
+): string {
   if (!entries.length) {
     return `<div class="entry-empty">No files yet.</div>`;
   }
 
   return `
     <ul class="entry-list">
-      ${entries.map((entry) => renderEntry(passId, entry)).join("")}
+      ${entries.map((entry) => renderEntry(passId, entry, seenEntries)).join("")}
     </ul>
   `;
 }
 
-function renderEntry(passId: string, entry: Entry): string {
+function renderEntry(passId: string, entry: Entry, seenEntries: Set<string>): string {
   if (entry.kind === "directory") {
     const childCount = entry.children.length;
+    const entryKey = `${passId}:${entry.path}`;
+    seenEntries.add(entryKey);
+    const isExpanded = expandedEntries.has(entryKey);
     const childContent =
       childCount > 0
-        ? renderEntries(passId, entry.children)
+        ? renderEntries(passId, entry.children, seenEntries)
         : `<div class="entry-empty">Empty folder</div>`;
 
     return `
       <li class="entry directory">
-        <div class="entry-header directory-header" onclick="toggleEntry(this)">
+        <div class="entry-header directory-header" data-entry-key="${entryKey}" onclick="toggleEntry(this)">
           <div class="entry-summary">
             <span class="entry-icon" aria-hidden="true">📁</span>
             <span class="entry-name">${entry.name}</span>
@@ -211,10 +240,10 @@ function renderEntry(passId: string, entry: Entry): string {
           <div class="entry-meta">
             <span class="entry-count">${childCount} item${childCount === 1 ? "" : "s"}</span>
             <span class="entry-modified">${entry.modified}</span>
-            <span class="entry-toggle" aria-hidden="true">▶</span>
+            <span class="entry-toggle${isExpanded ? " expanded" : ""}" aria-hidden="true">▶</span>
           </div>
         </div>
-        <div class="entry-children">
+        <div class="entry-children${isExpanded ? " expanded" : ""}">
           ${childContent}
         </div>
       </li>
@@ -311,9 +340,11 @@ async function downloadPass(passId: string, evt?: Event) {
   setDownloadProgress("Preparing archive…");
 
   try {
+    const machineLabel = getMachineLabel();
     const startRequest = VIAM.Struct.fromJson({
       command: "start_pass_archive",
       pass_id: passId,
+      machine: machineLabel,
     });
     const startRaw = (await webappService.doCommand(startRequest)) as unknown;
     if (!isArchiveStartResponse(startRaw)) {
@@ -325,7 +356,7 @@ async function downloadPass(passId: string, evt?: Event) {
     const filename = startRaw.filename || `${passId}.zip`;
 
     const chunkSize = 4 * 1024 * 1024;
-    const parts: Uint8Array[] = [];
+    const parts: ArrayBuffer[] = [];
     let nextOffset = 0;
     let downloadedBytes = 0;
     const startTime = performance.now();
@@ -346,7 +377,9 @@ async function downloadPass(passId: string, evt?: Event) {
       const chunkBytes =
         chunkData.length > 0 ? base64ToUint8Array(chunkData) : new Uint8Array();
       if (chunkBytes.length > 0) {
-        parts.push(chunkBytes);
+        const bufferCopy = new ArrayBuffer(chunkBytes.byteLength);
+        new Uint8Array(bufferCopy).set(chunkBytes);
+        parts.push(bufferCopy);
       }
 
       const bytesRead = chunkRaw.bytes ?? chunkBytes.length;
@@ -421,7 +454,10 @@ async function finishArchiveSession(session: string) {
 }
 
 function base64ToBlob(base64Data: string): Blob {
-  return new Blob([base64ToUint8Array(base64Data)]);
+  const bytes = base64ToUint8Array(base64Data);
+  const buffer = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(buffer).set(bytes);
+  return new Blob([buffer], { type: "application/octet-stream" });
 }
 
 function base64ToUint8Array(base64Data: string): Uint8Array {
@@ -439,16 +475,25 @@ function base64ToUint8Array(base64Data: string): Uint8Array {
 function togglePass(header: HTMLElement) {
   const content = header.nextElementSibling as HTMLElement | null;
   const icon = header.querySelector(".toggle-icon") as HTMLElement | null;
+  const passId = header.dataset.passId;
 
   if (content && icon) {
     content.classList.toggle("expanded");
     icon.classList.toggle("expanded");
+    if (passId) {
+      if (content.classList.contains("expanded")) {
+        expandedPasses.add(passId);
+      } else {
+        expandedPasses.delete(passId);
+      }
+    }
   }
 }
 
 function toggleEntry(header: HTMLElement) {
   const children = header.nextElementSibling as HTMLElement | null;
   const icon = header.querySelector(".entry-toggle") as HTMLElement | null;
+  const entryKey = header.getAttribute("data-entry-key");
 
   if (children) {
     children.classList.toggle("expanded");
@@ -456,17 +501,32 @@ function toggleEntry(header: HTMLElement) {
   if (icon) {
     icon.classList.toggle("expanded");
   }
+  if (entryKey) {
+    if (children?.classList.contains("expanded")) {
+      expandedEntries.add(entryKey);
+    } else {
+      expandedEntries.delete(entryKey);
+    }
+  }
 }
 
 function expandAll() {
   document.querySelectorAll<HTMLElement>(".pass-content").forEach((content) => {
     content.classList.add("expanded");
+    const passId = content.parentElement?.getAttribute("data-pass-id");
+    if (passId) {
+      expandedPasses.add(passId);
+    }
   });
   document.querySelectorAll<HTMLElement>(".toggle-icon").forEach((icon) => {
     icon.classList.add("expanded");
   });
   document.querySelectorAll<HTMLElement>(".entry-children").forEach((child) => {
     child.classList.add("expanded");
+    const entryKey = child.previousElementSibling?.getAttribute("data-entry-key");
+    if (entryKey) {
+      expandedEntries.add(entryKey);
+    }
   });
   document.querySelectorAll<HTMLElement>(".entry-toggle").forEach((icon) => {
     icon.classList.add("expanded");
@@ -476,12 +536,20 @@ function expandAll() {
 function collapseAll() {
   document.querySelectorAll<HTMLElement>(".pass-content").forEach((content) => {
     content.classList.remove("expanded");
+    const passId = content.parentElement?.getAttribute("data-pass-id");
+    if (passId) {
+      expandedPasses.delete(passId);
+    }
   });
   document.querySelectorAll<HTMLElement>(".toggle-icon").forEach((icon) => {
     icon.classList.remove("expanded");
   });
   document.querySelectorAll<HTMLElement>(".entry-children").forEach((child) => {
     child.classList.remove("expanded");
+    const entryKey = child.previousElementSibling?.getAttribute("data-entry-key");
+    if (entryKey) {
+      expandedEntries.delete(entryKey);
+    }
   });
   document.querySelectorAll<HTMLElement>(".entry-toggle").forEach((icon) => {
     icon.classList.remove("expanded");
@@ -503,6 +571,35 @@ function setStatus(message: string) {
   const element = document.getElementById("status-text");
   if (element) {
     element.textContent = message;
+  }
+}
+
+function startAutoRefresh() {
+  stopAutoRefresh();
+  autoRefreshHandle = window.setInterval(() => {
+    if (document.visibilityState === "visible") {
+      refreshPasses().catch((error) => {
+        console.warn("Auto refresh failed:", error);
+      });
+    }
+  }, AUTO_REFRESH_MS);
+
+  document.addEventListener("visibilitychange", handleVisibilityChange, { passive: true });
+}
+
+function stopAutoRefresh() {
+  if (autoRefreshHandle !== undefined) {
+    window.clearInterval(autoRefreshHandle);
+    autoRefreshHandle = undefined;
+  }
+  document.removeEventListener("visibilitychange", handleVisibilityChange);
+}
+
+function handleVisibilityChange() {
+  if (document.visibilityState === "visible") {
+    refreshPasses().catch((error) => {
+      console.warn("Visibility refresh failed:", error);
+    });
   }
 }
 
@@ -610,6 +707,35 @@ function formatDuration(seconds: number): string {
   const days = Math.floor(hours / 24);
   const remainingHours = hours % 24;
   return remainingHours === 0 ? `${days}d` : `${days}d ${remainingHours}h`;
+}
+
+function getMachineLabel(): string {
+  if (currentMachineSlug && currentMachineSlug.length > 0) {
+    return currentMachineSlug;
+  }
+  if (machineSettings?.serviceName) {
+    return machineSettings.serviceName;
+  }
+  if (machineSettings?.host) {
+    return machineSettings.host.replace(/https?:\/\//, "");
+  }
+  return "machine";
+}
+
+function comparePassTimestamp(lhs: PassInfo, rhs: PassInfo): number {
+  const lhsDate = Date.parse(lhs.timestamp);
+  const rhsDate = Date.parse(rhs.timestamp);
+
+  if (Number.isFinite(lhsDate) && Number.isFinite(rhsDate)) {
+    return lhsDate - rhsDate;
+  }
+  if (Number.isFinite(lhsDate)) {
+    return -1;
+  }
+  if (Number.isFinite(rhsDate)) {
+    return 1;
+  }
+  return 0;
 }
 
 function isEntry(value: unknown): value is Entry {
@@ -725,6 +851,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const segments = window.location.pathname.split("/").filter(Boolean);
   const machineSlug = segments.length >= 2 ? segments[1] : undefined;
   console.log("Resolved machine slug:", machineSlug ?? "(none)");
+  currentMachineSlug = machineSlug ?? currentMachineSlug;
 
   if (machineSlug) {
     const cookieData = Cookies.get(machineSlug);
